@@ -3,7 +3,7 @@ import { useEventOpsStore } from '../store/useEventOpsStore';
 import { X, Plus, AlertCircle, Check, MapPin, Zap } from 'lucide-react';
 
 export const ReportIncidentModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
-  const { assignWorkerToMultiDeptTask, departments } = useEventOpsStore();
+  const { addTask, assignWorkerToMultiDeptTask, departments } = useEventOpsStore();
 
   const [title, setTitle] = useState('');
   const [department, setDepartment] = useState('Lighting');
@@ -17,8 +17,19 @@ export const ReportIncidentModal: React.FC<{ isOpen: boolean; onClose: () => voi
     if (!title) return;
 
     const newTaskId = `task-${Date.now()}`;
+    addTask({
+      id: newTaskId,
+      title,
+      category: department,
+      priority,
+      location,
+      x: 35 + Math.floor(Math.random() * 30),
+      y: 35 + Math.floor(Math.random() * 30)
+    });
+
     assignWorkerToMultiDeptTask(newTaskId, 'Raj Kumar (Auto-Assigned)', department);
     onClose();
+    setTitle('');
   };
 
   return (
