@@ -43,13 +43,22 @@ export interface MultiDeptTask {
   stage: 'WAITING' | 'ASSIGNED' | 'TRAVELLING' | 'WORKING' | 'VERIFICATION' | 'COMPLETED';
   location: string;
   waitingSeconds: number;
+  waitingTimeSeconds?: number;
   assignedWorkers: { id: string; name: string; dept: string; eta: string }[];
+  assignedWorker?: { name: string; eta: string; dist: string };
+  assigned_worker_id?: string;
   rootCauseAnalysis?: string;
   candidates?: { id: string; name: string; dist: string; score: number; battery: number }[];
   timeline?: { time: string; event: string }[];
   x: number;
   y: number;
+  status?: any;
+  latitude?: number;
+  longitude?: number;
 }
+
+export type TaskItem = MultiDeptTask;
+export type IncidentItem = MultiDeptTask;
 
 export interface GISLayerState {
   workers: boolean;
@@ -102,16 +111,26 @@ interface EventOSMasterStore {
   highIncidentsCount: number;
   mediumIncidentsCount: number;
   totalWorkersOnline: number;
+  workersOnline: number;
+  workersBusy: number;
+  workersOffline: number;
   healthyDeptsCount: number;
   totalDeptsCount: number;
   equipmentAlertsCount: number;
   weatherText: string;
 
+  isCreateModalOpen: boolean;
   departments: DepartmentInfo[];
   workers: WorkerCard[];
   tasks: MultiDeptTask[];
-  incidents: MultiDeptTask[]; // Alias for backward compatibility
+  incidents: MultiDeptTask[];
   gisLayers: GISLayerState;
+
+  skillGroups: { category: string; count: number; activeTasks: number; supervisor?: string; free?: number; busy?: number; workers?: { id: string; name: string; status: string; battery: number; distance?: string; dist?: string }[] }[];
+  supervisors: { team: string; name: string; workerCount: number; activeTasks: number; escalations: number; avgResponseSec: number; workers: any[] }[];
+  aiSuggestions: { id: string; title: string; impact: string; recommendation: string; reason?: string; recommendedAction?: string }[];
+  resources: { id: string; name: string; status: string; location: string; available?: number; total?: number; unit?: string }[];
+  timeline: { id: string; timestamp: string; event: string; time?: string; text?: string }[];
 
   activeVenuePreset: VenueBlueprintPreset | null;
   actionRequiredIncidentId: string | null;
@@ -124,12 +143,15 @@ interface EventOSMasterStore {
   
   copilotMessages: CopilotMessage[];
 
-  // Replay Controller State
   isReplaying: boolean;
   isPlayingPlayback: boolean;
   playbackMinute: number;
 
-  // Actions
+  setIsCreateModalOpen: (open: boolean) => void;
+  addTask: (task: any) => void;
+  updateTaskStatus: (taskId: string, status: any) => void;
+  advanceTaskStatus: (taskId: string) => void;
+  sendBroadcast: (msg: string, target: string) => void;
   setEventPreset: (preset: { name: string; crowd: number; workers: number; depts: number; venue: string }) => void;
   setSelectedDepartmentFilter: (dept: string) => void;
   setSelectedWorkerCard: (worker: WorkerCard | null) => void;
@@ -142,6 +164,7 @@ interface EventOSMasterStore {
   toggleGISLayer: (layerKey: keyof GISLayerState) => void;
   setIsReplaying: (playing: boolean) => void;
   setIsPlayingPlayback: (playing: boolean) => void;
+  setPlaybackMinute: (min: number) => void;
   setReplayMinute: (min: number) => void;
   
   advanceTaskStage: (taskId: string) => void;
@@ -160,9 +183,13 @@ const initialTasks: MultiDeptTask[] = [
     category: 'MEDICAL',
     priority: 'EMERGENCY',
     stage: 'TRAVELLING',
+    status: 'IN_PROGRESS',
     location: 'VIP Gate 4 Turnstiles',
     waitingSeconds: 8,
+    waitingTimeSeconds: 8,
     assignedWorkers: [{ id: 'w-102', name: 'Dr. Ravi Kumar', dept: 'Medical', eta: '38s' }],
+    assignedWorker: { name: 'Dr. Ravi Kumar', eta: '38s', dist: '15m' },
+    assigned_worker_id: 'Dr. Ravi Kumar',
     candidates: [
       { id: 'w-102', name: 'Dr. Ravi Kumar', dist: '15m away', score: 0.96, battery: 88 },
       { id: 'w-103', name: 'Ajay Singh', dist: '30m away', score: 0.81, battery: 76 }
@@ -182,12 +209,16 @@ const initialTasks: MultiDeptTask[] = [
     category: 'LIGHTING',
     priority: 'HIGH',
     stage: 'WORKING',
+    status: 'IN_PROGRESS',
     location: 'Stage A Grid Controls',
     waitingSeconds: 42,
+    waitingTimeSeconds: 42,
     rootCauseAnalysis: 'Root Cause: Power Grid Voltage Spike. Recommended: Assign Electrician (Raj Kumar) + Audio Tech (Sunil Rao).',
     assignedWorkers: [
       { id: 'w-201', name: 'Raj Kumar', dept: 'Lighting', eta: '2m' }
     ],
+    assignedWorker: { name: 'Raj Kumar', eta: '2m', dist: '5m' },
+    assigned_worker_id: 'Raj Kumar',
     candidates: [
       { id: 'w-201', name: 'Raj Kumar', dist: '5m away', score: 0.98, battery: 83 }
     ],
@@ -207,11 +238,15 @@ export const useEventOpsStore = create<EventOSMasterStore>((set, get) => ({
   highIncidentsCount: 11,
   mediumIncidentsCount: 27,
   totalWorkersOnline: 298,
+  workersOnline: 298,
+  workersBusy: 42,
+  workersOffline: 8,
   healthyDeptsCount: 18,
   totalDeptsCount: 20,
   equipmentAlertsCount: 4,
   weatherText: 'Clear 28°C',
 
+  isCreateModalOpen: false,
   selectedDepartmentFilter: 'ALL',
   selectedWorkerCard: null,
   selectedWorkerDetail: null,
@@ -230,6 +265,61 @@ export const useEventOpsStore = create<EventOSMasterStore>((set, get) => ({
   isReplaying: false,
   isPlayingPlayback: false,
   playbackMinute: 12,
+
+  skillGroups: [
+    { 
+      category: 'Medical', count: 14, activeTasks: 1, supervisor: 'Dr. Priya', free: 12, busy: 2,
+      workers: [{ id: 'w-102', name: 'Dr. Ravi Kumar', status: 'FREE', battery: 88, distance: '15m', dist: '15m' }]
+    },
+    { 
+      category: 'Lighting', count: 24, activeTasks: 2, supervisor: 'Ramesh', free: 18, busy: 6,
+      workers: [{ id: 'w-201', name: 'Raj Kumar', status: 'WORKING', battery: 83, distance: '5m', dist: '5m' }]
+    },
+    { 
+      category: 'Security', count: 62, activeTasks: 5, supervisor: 'Vikram', free: 51, busy: 11,
+      workers: [{ id: 'w-301', name: 'Vikram Singh', status: 'FREE', battery: 92, distance: '30m', dist: '30m' }]
+    }
+  ],
+  supervisors: [
+    {
+      team: 'Medical & First Aid',
+      name: 'Dr. Priya Sharma',
+      workerCount: 14,
+      activeTasks: 1,
+      escalations: 0,
+      avgResponseSec: 28,
+      workers: [{ id: 'w-102', name: 'Dr. Ravi Kumar', status: 'WORKING', battery: 88, currentTask: 'Gate 4 Medical Emergency' }]
+    },
+    {
+      team: 'Lighting & Stage Power',
+      name: 'Ramesh Tech',
+      workerCount: 24,
+      activeTasks: 2,
+      escalations: 1,
+      avgResponseSec: 38,
+      workers: [{ id: 'w-201', name: 'Raj Kumar', status: 'GOING_TO_TASK', battery: 83, currentTask: 'Spotlight #203 Trip' }]
+    },
+    {
+      team: 'Perimeter Security',
+      name: 'Vikram Singh',
+      workerCount: 62,
+      activeTasks: 5,
+      escalations: 0,
+      avgResponseSec: 42,
+      workers: [{ id: 'w-301', name: 'Vikram Singh', status: 'FREE', battery: 92, currentTask: 'Turnstile Patrol' }]
+    }
+  ],
+  aiSuggestions: [
+    { id: '1', title: 'Gate 4 Medical Collapse', impact: 'HIGH', recommendation: 'Auto-dispatch Dr. Ravi', reason: 'Nearest certified doctor', recommendedAction: 'Dispatch Dr. Ravi' }
+  ],
+  resources: [
+    { id: '1', name: 'Trauma Ambulances', status: 'AVAILABLE', location: 'Gate 4', available: 4, total: 6, unit: 'units' },
+    { id: '2', name: 'Power Generators', status: 'IN_USE', location: 'Stage A', available: 8, total: 10, unit: 'units' }
+  ],
+  timeline: [
+    { id: '1', timestamp: '12:00 PM', time: '12:00 PM', event: 'EventOS System Initialized', text: 'EventOS System Initialized' },
+    { id: '2', timestamp: '12:01 PM', time: '12:01 PM', event: 'Gate 4 Medical Emergency Logged', text: 'Gate 4 Medical Emergency Logged' }
+  ],
 
   gisLayers: {
     workers: true,
@@ -350,6 +440,40 @@ export const useEventOpsStore = create<EventOSMasterStore>((set, get) => ({
   tasks: initialTasks,
   incidents: initialTasks,
 
+  setIsCreateModalOpen: (open) => set({ isCreateModalOpen: open }),
+  addTask: (newTask) => set((state) => {
+    const formattedTask: MultiDeptTask = {
+      id: newTask.id || `task-${Date.now()}`,
+      title: newTask.title || 'New Incident',
+      department: newTask.category || 'General',
+      category: newTask.category || 'GENERAL',
+      priority: newTask.priority || 'MEDIUM',
+      stage: 'WAITING',
+      status: 'DISPATCHED',
+      location: 'VIP Gate Area',
+      waitingSeconds: 0,
+      waitingTimeSeconds: 0,
+      assignedWorkers: [],
+      x: 50,
+      y: 50
+    };
+    return { tasks: [formattedTask, ...state.tasks], incidents: [formattedTask, ...state.incidents] };
+  }),
+
+  updateTaskStatus: (taskId, newStatus) => set((state) => {
+    const updated = state.tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t);
+    return { tasks: updated, incidents: updated };
+  }),
+
+  advanceTaskStatus: (taskId) => get().advanceTaskStage(taskId),
+
+  sendBroadcast: (msg, target) => set((state) => ({
+    copilotMessages: [
+      ...state.copilotMessages,
+      { id: `m-${Date.now()}`, sender: 'MANAGER', text: `📢 BROADCAST (${target}): ${msg}`, timestamp: '12:07 PM' }
+    ]
+  })),
+
   setEventPreset: (preset) => set({
     eventName: `${preset.name} COMMAND CENTER`,
     crowdCount: preset.crowd,
@@ -372,6 +496,7 @@ export const useEventOpsStore = create<EventOSMasterStore>((set, get) => ({
 
   setIsReplaying: (playing) => set({ isReplaying: playing }),
   setIsPlayingPlayback: (playing) => set({ isPlayingPlayback: playing }),
+  setPlaybackMinute: (min) => set({ playbackMinute: min }),
   setReplayMinute: (min) => set({ playbackMinute: min }),
 
   advanceTaskStage: (taskId) => set((state) => {
